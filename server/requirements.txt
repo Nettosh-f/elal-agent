@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+redis>=5
+fakeredis
+python-jose[cryptography]
+pydantic
+openai>=1.0.0
