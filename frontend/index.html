@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chat • One Tab</title>
+    <style>
+        :root { font-family: ui-sans-serif, system-ui, Arial; }
+        body { margin: 0; background:#0b0c10; color:#e5e7eb; }
+        header { padding: 14px 16px; border-bottom:1px solid #1f2937; display:flex; align-items:center; gap:12px; }
+        .tab { font-weight:600; }
+        .container { max-width: 800px; margin: 0 auto; padding: 16px; }
+        .messages { border:1px solid #1f2937; border-radius:12px; padding: 12px; height: 60vh; overflow:auto; background:#111827; }
+        .msg { margin: 10px 0; padding: 10px 12px; border-radius:10px; line-height:1.45; white-space:pre-wrap; }
+        .user { background:#1f2937; }
+        .assistant { background:#0f172a; }
+        .system { opacity:.8; font-style:italic; }
+        form { display:flex; gap:8px; margin-top: 12px; }
+        input, button { font-size: 16px; }
+        input[type=text] { flex:1; padding:12px; border-radius:10px; border:1px solid #374151; background:#0b1220; color:#e5e7eb; }
+        button { padding: 10px 14px; border-radius:10px; background:#2563eb; color:white; border:none; cursor:pointer; }
+        button.secondary { background:#374151; }
+        .muted { opacity:.7; font-size: 12px; margin-left: 12px; }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="tab">Chat</div>
+        <div class="muted" id="who"></div>
+        <div style="margin-left:auto; display:flex; gap:8px;">
+            <button id="signin">Dev Sign‑in</button>
+            <button id="start">Start</button>
+            <button id="end" class="secondary">End</button>
+        </div>
+    </header>
+    <div class="container">
+        <div id="messages" class="messages"></div>
+        <form id="form">
+            <label for="input"></label><input id="input" type="text" placeholder="Type a message…" autocomplete="off" />
+            <button type="submit">Send</button>
+        </form>
+    </div>
+<script>
+    let sessionId = null;
+    let token = localStorage.getItem('token') || '';
+    const api = (path) => `http://localhost:8000${path}`;
+    const $msgs = document.getElementById('messages');
+    const $form = document.getElementById('form');
+    const $input = document.getElementById('input');
+    const $start = document.getElementById('start');
+    const $end = document.getElementById('end');
+    const $signin = document.getElementById('signin');
+    const $who = document.getElementById('who');
+
+    function hdr(){ return token ? { 'Authorization': `Bearer ${token}` } : {}; }
+    function setWho(){
+      const ul = localStorage.getItem('ul') === '1';
+      $who.textContent = token ? `authed${ul ? ' (UL)' : ''}` : 'anonymous';
+    }
+    setWho();
+
+    function add(role, text){
+        const el = document.createElement('div');
+        el.className = `msg ${role}`;
+        el.textContent = text;
+        $msgs.appendChild(el);
+        $msgs.scrollTop = $msgs.scrollHeight;
+        return el;
+    }
+
+    async function devSignin(){
+      const pwd = window.prompt('Enter dev password:', 'demo@local');
+      if (pwd == null) return;
+
+      console.log('requested'); // fired when the request is sent
+
+      // Abort if the server doesn't answer quickly
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 6000);
+
+      add('system', 'Requesting dev token…');
+
+      try {
+        const res = await fetch(
+          api(`/api/auth/dev-token?user_id=${encodeURIComponent(pwd)}`),
+          { signal: ctrl.signal }
+        );
+
+        console.info('dev-token status:', res.status);
+
+        if (!res.ok) {
+          console.error('request denied');
+          add('system', `Sign-in failed (${res.status}).`);
+          return;
+        }
+
+        const data = await res.json();
+        token = data.token;
+        localStorage.setItem('token', token);
+
+        const ul = !!data.ul; // will be false unless you patch backend (step 2)
+        localStorage.setItem('ul', ul ? '1' : '0');
+
+        console.log('request granted'); // fired only on success
+        add('system', `Signed in as ${pwd}${ul ? ' (unlimited)' : ''}.`);
+        setWho && setWho();
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          console.error('request denied (timeout)');
+          add('system', 'Sign-in timed out. Is the API running on http://localhost:8000?');
+        } else {
+          console.error('request denied', err);
+          add('system', 'Sign-in error. See console.');
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    async function startConversation(){
+        const res = await fetch(api('/api/conversations'), { method:'POST', headers: hdr() });
+        if(res.status === 401){ add('system', 'Unauthorized. Click Dev Sign‑in.'); return; }
+        const data = await res.json();
+        sessionId = data.session_id;
+        add('system', `Session started: ${sessionId}`);
+    }
+
+    async function endConversation(){
+        if(!sessionId) return;
+        const res = await fetch(api(`/api/conversations/${sessionId}/end`), { method:'POST', headers: hdr() });
+        if(res.status === 429){ add('system', 'Rate limit hit. Try later.'); return; }
+        const data = await res.json();
+        add('system', `Ended. Log saved at: ${data.log_path}`);
+        sessionId = null;
+    }
+
+    $form.addEventListener('submit', async (e)=>{
+        e.preventDefault();
+        if(!$input.value.trim()) return;
+        if(!token){ add('system','Unauthorized. Click Dev Sign‑in first.'); return; }
+        if(!sessionId){ await startConversation(); if(!sessionId) return; }
+
+
+        const text = $input.value; $input.value = '';
+        add('user', text);
+
+
+        const el = add('assistant', '');
+        const resp = await fetch(api('/api/chat'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...hdr() },
+            body: JSON.stringify({ session_id: sessionId, message: text })
+        });
+
+
+        if(resp.status === 429){ el.textContent = 'Rate limit hit. Try later.'; return; }
+        if(!resp.ok){ el.textContent = `Error ${resp.status}`; return; }
+
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        while(true){
+            const { done, value } = await reader.read();
+            if(done) break;
+            el.textContent += decoder.decode(value, { stream: true });
+            $msgs.scrollTop = $msgs.scrollHeight;
+        }
+    });
+
+    $start.addEventListener('click', startConversation);
+    $end.addEventListener('click', endConversation);
+    $signin.addEventListener('click', devSignin);
+    DevAuth.wrapGlobalFetch();
+
+    document.getElementById('dev-signin').addEventListener('click', () => {
+      DevAuth.activate({
+        baseUrl: 'http://127.0.0.1:8000',   // your API
+        // password: 'demo@local',          // optional; omit to show the prompt
+        onGranted: ({ ul }) => {
+          // Update your UI as you like
+          const who = document.querySelector('#who');
+          if (who) who.textContent = `authed${ul ? ' (UL)' : ''}`;
+        }
+      });
+    });
+</script>
+<script src="./dev-activation.js"></script>
+</body>
+</html>
