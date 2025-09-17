@@ -1,7 +1,7 @@
 # app.py
 import os, uuid, datetime, time, json
 from typing import Dict, Any, List
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from pathlib import Path
 from dotenv import load_dotenv
 from pydantic import BaseModel
+
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
 # ----- config -------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -31,6 +32,7 @@ JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
 JWT_ALG = "HS256"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 
+
 async def init_redis():
     global redis
     if USE_FAKE_REDIS:
@@ -48,6 +50,8 @@ async def init_redis():
         from fakeredis.aioredis import FakeRedis
         redis = FakeRedis(decode_responses=True)
         print("[redis] Falling back to FakeRedis (dev)")
+
+
 # ------------ App ------------
 app = FastAPI(title="Simple Chat (Redis TTL + JWT + Rate Limit)")
 app.add_middleware(
@@ -67,6 +71,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # ------------ Models ------------
 
@@ -97,11 +102,20 @@ def retrieve_context(query: str, k: int = 4) -> List[Dict]:
 
 
 # ------------ Auth helpers ------------
-
-
 class AuthedUser(BaseModel):
     sub: str  # user id / email
     ul: bool = False
+
+
+def require_auth(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    token = authorization.split(" ", 1)[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        return payload  # contains sub and maybe ul
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 async def get_current_user(req: Request) -> AuthedUser:
@@ -192,7 +206,6 @@ async def send_message(session_id: str, body: ChatIn, auth: str = Depends(requir
     return await chat_endpoint(ChatRequest(session_id=session_id, message=body.message), auth)
 
 
-
 @app.post("/api/auth/dev-token")
 def dev_token_post(body: DevSignin):
     return dev_token(user_id=body.user_id)
@@ -269,6 +282,8 @@ async def end_conversation(session_id: str, user: AuthedUser = Depends(get_curre
     await redis.delete(sess_meta_key(session_id))
 
     return {"status": "ok", "log_path": path}
+
+
 # ------------ Helpers ------------
 
 
