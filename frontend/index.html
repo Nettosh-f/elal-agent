@@ -74,39 +74,30 @@
   setWho();
 
   // 2) Dev Sign-in via POST JSON (user_id + password)
-  async function devSignin(){
-    const userId = window.prompt('Enter user id (e.g. demo@local):', 'demo@local');
-    if (userId == null) return;
-    const pwd = window.prompt('Enter dev password:', 'demo@local');
-    if (pwd == null) return;
+  async function devSignin() {
+  const userId = window.prompt('Enter user id (e.g. demo@local):', 'demo@local');
+  if (userId == null) return;
 
-    console.log('[signin] requested');
-    const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 8000);
-    add('system', 'Requesting dev token…');
+  console.log('[signin] requested');
+  const res = await fetch(
+    `https://apk-agent.onrender.com/api/auth/dev-token?user_id=${encodeURIComponent(userId)}`,
+    { method: 'GET', mode: 'cors' }
+  );
 
-    try {
-      const res = await fetch(api('/api/auth/dev-token'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId, password: pwd }),
-        signal: ctrl.signal,
-        mode: 'cors'
-      });
-      console.log('[signin] status', res.status);
-      if (!res.ok) { add('system', `Sign-in failed (${res.status}).`); return; }
-
-      const data = await res.json();
-      token = data.token; localStorage.setItem('token', token);
-      localStorage.setItem('ul', data.ul ? '1' : '0');
-      console.log('[signin] request granted');
-      add('system', `Signed in as ${userId}${data.ul ? ' (unlimited)' : ''}.`);
-      setWho();
-    } catch (e) {
-      add('system', `Sign-in error / timeout. Is API up at ${API_BASE} ?`);
-      console.error(e);
-    } finally { clearTimeout(timeout); }
+  if (!res.ok) {
+    add('system', `Sign-in failed (${res.status}).`);
+    return;
   }
+
+  const data = await res.json();
+  token = data.token;
+  localStorage.setItem('token', token);
+  localStorage.setItem('ul', data.ul ? '1' : '0');
+  console.log('[signin] request granted');
+  add('system', `Signed in as ${userId}${data.ul ? ' (unlimited)' : ''}.`);
+  setWho();
+}
+
 
   async function startConversation(){
     console.log('[start] POST /api/conversations');

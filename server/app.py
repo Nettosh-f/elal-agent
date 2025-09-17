@@ -10,6 +10,7 @@ from jose import jwt, JWTError
 from redis.asyncio import Redis
 from pathlib import Path
 from dotenv import load_dotenv
+from pydantic import BaseModel
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
 # ----- config -------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -176,6 +177,13 @@ SYSTEM_PROMPT = "You are a concise, helpful assistant. Keep answers short unless
 
 
 # ------------ Endpoints ------------
+class DevSignin(BaseModel):
+    user_id: str
+
+
+@app.post("/api/auth/dev-token")
+def dev_token_post(body: DevSignin):
+    return dev_token(user_id=body.user_id)
 
 
 @app.post("/api/conversations", response_model=StartResp)

@@ -1,8 +1,10 @@
-fastapi
+fastapi~=0.116.1
 uvicorn[standard]
-python-dotenv
+python-dotenv~=1.1.0
 redis>=5
 fakeredis
 python-jose[cryptography]
-pydantic
+pydantic~=2.5.0
 openai>=1.0.0
+pathlib~=1.0.1
+dotenv~=0.9.9
