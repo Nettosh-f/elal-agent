@@ -37,14 +37,13 @@ async def init_redis():
         redis = FakeRedis(decode_responses=True)
         print("[redis] Using FakeRedis (dev)")
         return
-    # Real Redis
-    redis = Redis.from_url(REDIS_URL, decode_responses=True)
+
+    redis = Redis.from_url(REDIS_URL, decode_responses=True)  # assign first
     try:
         await redis.ping()
         print("[redis] Connected:", REDIS_URL)
     except Exception as e:
         print("[redis] Cannot connect to", REDIS_URL, "->", e)
-        # optional: fall back automatically
         from fakeredis.aioredis import FakeRedis
         redis = FakeRedis(decode_responses=True)
         print("[redis] Falling back to FakeRedis (dev)")
@@ -59,9 +58,10 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://apk-trainer.netlify.app",
     ],
-    # optional but convenient in dev:
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1):\d+$",
+    # Allow Netlify preview/prod sites:
+    allow_origin_regex=r"^https://.*\.netlify\.app$|^https://.*\.netlify\.live$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -150,22 +150,26 @@ def sess_msgs_key(sid: str) -> str: return f"sess:{sid}:messages"
 
 
 async def touch_ttl(sid: str):
-    await redis.expire(sess_meta_key(sid), SESSION_TTL)
-    await redis.expire(sess_msgs_key(sid), SESSION_TTL)
+    r = await get_redis_client()
+    await r.expire(sess_meta_key(sid), SESSION_TTL)
+    await r.expire(sess_msgs_key(sid), SESSION_TTL)
 
 
 async def append_msg(sid: str, msg: Dict[str, Any]):
-    await redis.rpush(sess_msgs_key(sid), json.dumps(msg))
+    r = await get_redis_client()
+    await r.rpush(sess_msgs_key(sid), json.dumps(msg))
     await touch_ttl(sid)
 
 
 async def get_msgs(sid: str) -> List[Dict[str, Any]]:
-    raw = await redis.lrange(sess_msgs_key(sid), 0, -1)
+    r = await get_redis_client()
+    raw = await r.lrange(sess_msgs_key(sid), 0, -1)
     return [json.loads(x) for x in raw]
 
 
 async def session_exists(sid: str) -> bool:
-    return (await redis.exists(sess_msgs_key(sid))) == 1
+    r = await get_redis_client()
+    return (await r.exists(sess_msgs_key(sid))) == 1
 
 
 SYSTEM_PROMPT = "You are a concise, helpful assistant. Keep answers short unless asked."
@@ -246,9 +250,22 @@ async def end_conversation(session_id: str, user: AuthedUser = Depends(get_curre
 
     return {"status": "ok", "log_path": path}
 # ------------ Helpers ------------
+
+
 @app.on_event("startup")
-async def _startup():
+async def startup_event():
+    print("[startup] init redis")
     await init_redis()
+
+
+async def get_redis_client() -> Redis:
+    global redis
+    if redis is None:
+        await init_redis()
+    if redis is None:
+        raise HTTPException(status_code=503, detail="Redis not initialized")
+    return redis
+
 
 def ts():
     return datetime.datetime.utcnow().isoformat()

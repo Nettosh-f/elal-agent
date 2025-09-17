@@ -40,150 +40,132 @@
             <button type="submit">Send</button>
         </form>
     </div>
+<!-- 1) Load helper first (optional). If you still want DevAuth, keep this line; otherwise remove all DevAuth lines below. -->
+<script src="dev-activation.js"></script>
+
 <script>
-    let sessionId = null;
-    let token = localStorage.getItem('token') || '';
-    const api = (path) => `http://localhost:8000${path}`;
-    const $msgs = document.getElementById('messages');
-    const $form = document.getElementById('form');
-    const $input = document.getElementById('input');
-    const $start = document.getElementById('start');
-    const $end = document.getElementById('end');
-    const $signin = document.getElementById('signin');
-    const $who = document.getElementById('who');
+  let sessionId = null;
+  let token = localStorage.getItem('token') || '';
+  const api = (path) => `http://localhost:8000${path}`;
+  const $msgs = document.getElementById('messages');
+  const $form = document.getElementById('form');
+  const $input = document.getElementById('input');
+  const $start = document.getElementById('start');
+  const $end = document.getElementById('end');
+  const $signin = document.getElementById('signin');
+  const $who = document.getElementById('who');
 
-    function hdr(){ return token ? { 'Authorization': `Bearer ${token}` } : {}; }
-    function setWho(){
-      const ul = localStorage.getItem('ul') === '1';
-      $who.textContent = token ? `authed${ul ? ' (UL)' : ''}` : 'anonymous';
-    }
-    setWho();
+  function hdr(){ return token ? { 'Authorization': `Bearer ${token}` } : {}; }
+  function add(role, text){
+    const el = document.createElement('div');
+    el.className = `msg ${role}`;
+    el.textContent = text;
+    $msgs.appendChild(el);
+    $msgs.scrollTop = $msgs.scrollHeight;
+    return el;
+  }
+  function setWho(){
+    const ul = localStorage.getItem('ul') === '1';
+    $who.textContent = token ? `authed${ul ? ' (UL)' : ''}` : 'anonymous';
+  }
+  setWho();
 
-    function add(role, text){
-        const el = document.createElement('div');
-        el.className = `msg ${role}`;
-        el.textContent = text;
-        $msgs.appendChild(el);
-        $msgs.scrollTop = $msgs.scrollHeight;
-        return el;
-    }
+  async function devSignin(){
+    const pwd = window.prompt('Enter dev password:', 'demo@local');
+    if (pwd == null) return;
 
-    async function devSignin(){
-      const pwd = window.prompt('Enter dev password:', 'demo@local');
-      if (pwd == null) return;
+    console.log('[signin] requested');
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 8000);
+    add('system', 'Requesting dev token…');
 
-      console.log('requested'); // fired when the request is sent
+    try {
+      const res = await fetch(api(`/api/auth/dev-token?user_id=${encodeURIComponent(pwd)}`), { signal: ctrl.signal, mode:'cors' });
+      console.log('[signin] status', res.status);
+      if (!res.ok) { add('system', `Sign-in failed (${res.status}).`); return; }
+      const data = await res.json();
+      token = data.token; localStorage.setItem('token', token);
+      localStorage.setItem('ul', data.ul ? '1' : '0');
+      console.log('[signin] request granted');
+      add('system', `Signed in as ${pwd}${data.ul ? ' (unlimited)' : ''}.`);
+      setWho();
+    } catch (e) {
+      add('system', 'Sign-in error / timeout. Is API on http://localhost:8000 ?');
+      console.error(e);
+    } finally { clearTimeout(timeout); }
+  }
 
-      // Abort if the server doesn't answer quickly
-      const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 6000);
+  async function startConversation(){
+    console.log('[start] POST /api/conversations');
+    const res = await fetch(api('/api/conversations'), { method:'POST', headers: hdr(), mode:'cors' });
+    console.log('[start] status', res.status);
+    if (res.status === 401){ add('system', 'Unauthorized. Click Dev Sign-in.'); return; }
+    if (!res.ok){ add('system', `Start failed (${res.status}).`); return; }
+    const data = await res.json();
+    sessionId = data.session_id;
+    add('system', `Session started: ${sessionId}`);
+  }
 
-      add('system', 'Requesting dev token…');
+  async function endConversation(){
+    if(!sessionId) return;
+    console.log('[end] POST /api/conversations/:id/end');
+    const res = await fetch(api(`/api/conversations/${sessionId}/end`), { method:'POST', headers: hdr(), mode:'cors' });
+    if(res.status === 429){ add('system', 'Rate limit hit. Try later.'); return; }
+    if(!res.ok){ add('system', `End failed (${res.status}).`); return; }
+    const data = await res.json();
+    add('system', `Ended. Log saved at: ${data.log_path}`);
+    sessionId = null;
+  }
 
-      try {
-        const res = await fetch(
-          api(`/api/auth/dev-token?user_id=${encodeURIComponent(pwd)}`),
-          { signal: ctrl.signal }
-        );
+  $signin.addEventListener('click', devSignin);
+  $start.addEventListener('click', startConversation);
+  $end.addEventListener('click', endConversation);
 
-        console.info('dev-token status:', res.status);
+  $form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const text = $input.value.trim();
+    if(!text) return;
 
-        if (!res.ok) {
-          console.error('request denied');
-          add('system', `Sign-in failed (${res.status}).`);
-          return;
-        }
+    if(!token){ add('system','Unauthorized. Click Dev Sign-in first.'); return; }
 
-        const data = await res.json();
-        token = data.token;
-        localStorage.setItem('token', token);
-
-        const ul = !!data.ul; // will be false unless you patch backend (step 2)
-        localStorage.setItem('ul', ul ? '1' : '0');
-
-        console.log('request granted'); // fired only on success
-        add('system', `Signed in as ${pwd}${ul ? ' (unlimited)' : ''}.`);
-        setWho && setWho();
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          console.error('request denied (timeout)');
-          add('system', 'Sign-in timed out. Is the API running on http://localhost:8000?');
-        } else {
-          console.error('request denied', err);
-          add('system', 'Sign-in error. See console.');
-        }
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-
-    async function startConversation(){
-        const res = await fetch(api('/api/conversations'), { method:'POST', headers: hdr() });
-        if(res.status === 401){ add('system', 'Unauthorized. Click Dev Sign‑in.'); return; }
-        const data = await res.json();
-        sessionId = data.session_id;
-        add('system', `Session started: ${sessionId}`);
-    }
-
-    async function endConversation(){
-        if(!sessionId) return;
-        const res = await fetch(api(`/api/conversations/${sessionId}/end`), { method:'POST', headers: hdr() });
-        if(res.status === 429){ add('system', 'Rate limit hit. Try later.'); return; }
-        const data = await res.json();
-        add('system', `Ended. Log saved at: ${data.log_path}`);
-        sessionId = null;
+    // Ensure we have a session
+    if(!sessionId){
+      await startConversation();
+      if(!sessionId) return; // start failed (e.g., 401)
     }
 
-    $form.addEventListener('submit', async (e)=>{
-        e.preventDefault();
-        if(!$input.value.trim()) return;
-        if(!token){ add('system','Unauthorized. Click Dev Sign‑in first.'); return; }
-        if(!sessionId){ await startConversation(); if(!sessionId) return; }
+    add('user', text);
+    $input.value = '';
 
-
-        const text = $input.value; $input.value = '';
-        add('user', text);
-
-
-        const el = add('assistant', '');
-        const resp = await fetch(api('/api/chat'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...hdr() },
-            body: JSON.stringify({ session_id: sessionId, message: text })
-        });
-
-
-        if(resp.status === 429){ el.textContent = 'Rate limit hit. Try later.'; return; }
-        if(!resp.ok){ el.textContent = `Error ${resp.status}`; return; }
-
-
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        while(true){
-            const { done, value } = await reader.read();
-            if(done) break;
-            el.textContent += decoder.decode(value, { stream: true });
-            $msgs.scrollTop = $msgs.scrollHeight;
-        }
+    const el = add('assistant', '');
+    console.log('[chat] POST /api/chat', { sessionId });
+    const resp = await fetch(api('/api/chat'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...hdr() },
+      body: JSON.stringify({ session_id: sessionId, message: text }),
+      mode:'cors'
     });
 
-    $start.addEventListener('click', startConversation);
-    $end.addEventListener('click', endConversation);
-    $signin.addEventListener('click', devSignin);
+    console.log('[chat] status', resp.status);
+    if(resp.status === 429){ el.textContent = 'Rate limit hit. Try later.'; return; }
+    if(!resp.ok){ el.textContent = `Error ${resp.status}`; return; }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    while(true){
+      const { done, value } = await reader.read();
+      if(done) break;
+      el.textContent += decoder.decode(value, { stream: true });
+      $msgs.scrollTop = $msgs.scrollHeight;
+    }
+  });
+
+  // 2) OPTIONAL — if you keep DevAuth, only call it if it exists.
+  if (window.DevAuth && typeof DevAuth.wrapGlobalFetch === 'function') {
     DevAuth.wrapGlobalFetch();
-
-    document.getElementById('dev-signin').addEventListener('click', () => {
-      DevAuth.activate({
-        baseUrl: 'http://127.0.0.1:8000',   // your API
-        // password: 'demo@local',          // optional; omit to show the prompt
-        onGranted: ({ ul }) => {
-          // Update your UI as you like
-          const who = document.querySelector('#who');
-          if (who) who.textContent = `authed${ul ? ' (UL)' : ''}`;
-        }
-      });
-    });
+  }
+  // Remove any code that referenced #dev-signin; we’re using #signin.
 </script>
-<script src="./dev-activation.js"></script>
+
 </body>
 </html>
