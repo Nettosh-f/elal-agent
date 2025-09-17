@@ -4,46 +4,240 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Chat • One Tab</title>
-    <style>
-        :root { font-family: ui-sans-serif, system-ui, Arial; }
-        body { margin: 0; background:#0b0c10; color:#e5e7eb; }
-        header { padding: 14px 16px; border-bottom:1px solid #1f2937; display:flex; align-items:center; gap:12px; }
-        .tab { font-weight:600; }
-        .container { max-width: 800px; margin: 0 auto; padding: 16px; }
-        .messages { border:1px solid #1f2937; border-radius:12px; padding: 12px; height: 60vh; overflow:auto; background:#111827; }
-        .msg { margin: 10px 0; padding: 10px 12px; border-radius:10px; line-height:1.45; white-space:pre-wrap; }
-        .user { background:#1f2937; }
-        .assistant { background:#0f172a; }
-        .system { opacity:.8; font-style:italic; }
-        form { display:flex; gap:8px; margin-top: 12px; }
-        input, button { font-size: 16px; }
-        input[type=text] { flex:1; padding:12px; border-radius:10px; border:1px solid #374151; background:#0b1220; color:#e5e7eb; }
-        button { padding: 10px 14px; border-radius:10px; background:#2563eb; color:white; border:none; cursor:pointer; }
-        button.secondary { background:#374151; }
-        .muted { opacity:.7; font-size: 12px; margin-left: 12px; }
-    </style>
+  <style>
+    /* ====== Design Tokens (Light defaults) ====== */
+    :root {
+      --bg: #f7fafc;
+      --text: #0b1220;
+      --muted: #64748b;
+      --panel: #ffffff;
+      --panel-2: #f1f5f9;
+      --border: #e2e8f0;
+      --accent: #2563eb;
+      --accent-contrast: #ffffff;
+      --bubble-user: #e8f0fe;
+      --bubble-assistant: #f7f9fc;
+      --shadow: 0 8px 24px rgba(2, 6, 23, 0.08);
+    }
+    [data-theme="dark"] {
+      --bg: #0b0c10;
+      --text: #e5e7eb;
+      --muted: #9aa4b2;
+      --panel: #0f172a;
+      --panel-2: #111827;
+      --border: #1f2937;
+      --accent: #60a5fa;
+      --accent-contrast: #0b1220;
+      --bubble-user: #1f2937;
+      --bubble-assistant: #0b1220;
+      --shadow: 0 8px 28px rgba(0,0,0,0.35);
+    }
+
+    /* ====== Base ====== */
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Apple Color Emoji, Segoe UI Emoji;
+      background: radial-gradient(1000px 600px at 110% -10%, rgba(37, 99, 235, 0.12), transparent 40%),
+                  radial-gradient(900px 500px at -10% -20%, rgba(99, 102, 241, 0.12), transparent 40%),
+                  var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    /* ====== Header / Topbar ====== */
+    header {
+      position: sticky; top: 0; z-index: 10;
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 18px;
+      background: linear-gradient(to bottom, rgba(16, 23, 42, 0.6), rgba(16, 23, 42, 0.2)) , var(--panel);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; letter-spacing: 0.2px;
+    }
+    .brand img {
+      width: 28px; height: 28px; display: block;
+    }
+    .brand .title { font-size: 16px; }
+    .badge {
+      font-size: 12px; font-weight: 600;
+      padding: 4px 8px; border-radius: 999px;
+      background: var(--panel-2); border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .top-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+    button, .btn {
+      appearance: none; border: 1px solid var(--border);
+      background: var(--panel-2); color: var(--text);
+      padding: 10px 14px; border-radius: 12px; font-weight: 600;
+      cursor: pointer; transition: transform .02s ease, background .2s ease, border-color .2s ease;
+    }
+    button:hover { background: color-mix(in oklab, var(--panel-2) 85%, var(--accent) 15%); }
+    button:active { transform: translateY(1px); }
+    .btn-primary {
+      background: var(--accent); border-color: color-mix(in oklab, var(--accent) 70%, black 30%);
+      color: var(--accent-contrast);
+    }
+    .btn-ghost {
+      background: transparent;
+    }
+
+    /* Theme toggle button */
+    .theme-toggle {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+    }
+    .theme-toggle .icon { font-size: 16px; line-height: 1; }
+    .theme-toggle .label { font-size: 12px; color: var(--muted); }
+
+    /* ====== Layout ====== */
+    .container { max-width: 1000px; margin: 18px auto; padding: 0 18px; }
+    .grid {
+      display: grid; grid-template-columns: 280px 1fr; gap: 18px;
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+
+    /* ====== Left Panel (Training Controls) ====== */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 14px;
+      box-shadow: var(--shadow);
+    }
+    .panel h2 {
+      margin: 4px 0 10px; font-size: 14px; color: var(--muted); font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
+    }
+    .panel .stack { display: grid; gap: 8px; }
+    .hint { font-size: 12px; color: var(--muted); }
+
+    /* ====== Chat Area ====== */
+    .chat {
+      display: grid; grid-template-rows: 1fr auto; gap: 12px;
+      min-height: calc(100vh - 140px);
+    }
+    .messages {
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 12px; overflow: auto;
+      background: var(--panel-2);
+      box-shadow: var(--shadow);
+    }
+    .msg {
+      margin: 10px 0; padding: 12px 14px; border-radius: 12px;
+      white-space: pre-wrap; line-height: 1.5;
+      border: 1px solid var(--border);
+    }
+    .msg.user { background: var(--bubble-user); }
+    .msg.assistant { background: var(--bubble-assistant); }
+    .msg.system { opacity: .85; font-style: italic; background: transparent; }
+
+    form.chat-input {
+      display: grid; grid-template-columns: 1fr auto; gap: 10px;
+      border: 1px solid var(--border); border-radius: 14px; padding: 8px;
+      background: var(--panel); box-shadow: var(--shadow);
+    }
+    input[type="text"] {
+      width: 100%; font-size: 16px;
+      padding: 12px 12px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--panel-2); color: var(--text);
+      outline: none;
+    }
+    input[type="text"]::placeholder { color: var(--muted); }
+
+    .sr-only {
+      position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
+
+    footer {
+      text-align: center; font-size: 12px; color: var(--muted);
+      margin: 16px 0 24px;
+    }
+  </style>
 </head>
 <body>
-    <header>
-        <div class="tab">Chat</div>
-        <div class="muted" id="who"></div>
-        <div style="margin-left:auto; display:flex; gap:8px;">
-            <button id="signin">Dev Sign‑in</button>
-            <button id="start">Start</button>
-            <button id="end" class="secondary">End</button>
-        </div>
-    </header>
-    <div class="container">
-        <div id="messages" class="messages"></div>
-        <form id="form">
-            <label for="input"></label><input id="input" type="text" placeholder="Type a message…" autocomplete="off" />
-            <button type="submit">Send</button>
-        </form>
+  <header>
+    <div class="brand">
+      <!-- Replace /assets/logo.svg with your real logo -->
+      <img src="/assets/logo.svg" alt="Logo" onerror="this.style.display='none'">
+      <div class="title">APK-trainer <span class="badge">Pilot Training&nbsp;AI</span></div>
     </div>
+
+    <div class="top-actions">
+      <button id="themeToggle" class="theme-toggle btn-ghost" aria-pressed="true" title="Switch theme">
+        <span id="themeIcon" class="icon">🌙</span>
+        <span class="label">Dark</span>
+      </button>
+      <span id="who" class="badge" aria-live="polite">anonymous</span>
+      <button id="signin" class="btn">Dev&nbsp;Sign‑in</button>
+      <button id="start"  class="btn-primary">Start&nbsp;Session</button>
+      <button id="end"    class="btn">End&nbsp;Session</button>
+    </div>
+  </header>
+  <main class="container" id="main">
+
+
+    <!-- Right: Chat -->
+    <section class="chat" aria-label="Conversation">
+      <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions"></div>
+
+      <form id="form" class="chat-input">
+        <label for="input" class="sr-only">Type your message</label>
+        <input id="input" type="text" placeholder="Ask about IFR procedures, engine failures, CRM… " autocomplete="off" />
+        <button type="submit" class="btn-primary">Send</button>
+      </form>
+    </section>
+  </main>
+  <footer>© <span id="year"></span> APK-trainer • Built for professional flight training.</footer>
+
 <!-- 1) Load helper first (optional). If you still want DevAuth, keep this line; otherwise remove all DevAuth lines below. -->
 <script src="dev-activation.js"></script>
 
 <script>
+        // ====== Theme Handling ======
+    const $html = document.documentElement;
+    const $themeBtn = document.getElementById('themeToggle');
+    const $themeIcon = document.getElementById('themeIcon');
+    const $themeColor = document.getElementById('theme-color');
+    const THEME_KEY = 'aerolearn-theme';
+
+    function systemPrefersDark() {
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    function applyTheme(theme) {
+      $html.setAttribute('data-theme', theme);
+      if ($themeColor) $themeColor.setAttribute('content', theme === 'dark' ? '#0b0c10' : '#ffffff');
+      if ($themeBtn) {
+        $themeBtn.setAttribute('aria-pressed', theme === 'dark');
+        $themeBtn.querySelector('.label').textContent = theme === 'dark' ? 'Dark' : 'Light';
+        $themeIcon.textContent = theme === 'dark' ? '🌙' : '☀️';
+      }
+    }
+    function initTheme() {
+      const saved = localStorage.getItem(THEME_KEY);
+      const theme = saved || (systemPrefersDark() ? 'dark' : 'light');
+      applyTheme(theme);
+    }
+    function toggleTheme() {
+      const current = $html.getAttribute('data-theme') || 'light';
+      const next = current === 'dark' ? 'light' : 'dark';
+      localStorage.setItem(THEME_KEY, next);
+      applyTheme(next);
+    }
+    initTheme();
+    $themeBtn?.addEventListener('click', toggleTheme);
+
+    // Year
+    document.getElementById('year').textContent = new Date().getFullYear();
   let sessionId = null;
   let token = localStorage.getItem('token') || '';
   // 1) Use your Render base URL

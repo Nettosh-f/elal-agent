@@ -11,7 +11,7 @@ from redis.asyncio import Redis
 from pathlib import Path
 from dotenv import load_dotenv
 from pydantic import BaseModel
-
+from prompt import PROMPT
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
 # ----- config -------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -195,7 +195,7 @@ async def session_exists(sid: str) -> bool:
     return (await r.exists(sess_msgs_key(sid))) == 1
 
 
-SYSTEM_PROMPT = "You are a concise, helpful assistant. Keep answers short unless asked."
+SYSTEM_PROMPT = PROMPT
 
 
 # ------------ Endpoints ------------
