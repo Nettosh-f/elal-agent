@@ -46,7 +46,10 @@
 <script>
   let sessionId = null;
   let token = localStorage.getItem('token') || '';
-  const api = (path) => `http://localhost:8000${path}`;
+  // 1) Use your Render base URL
+  const API_BASE = 'https://apk-agent.onrender.com';
+  const api = (path) => `${API_BASE}${path}`;
+
   const $msgs = document.getElementById('messages');
   const $form = document.getElementById('form');
   const $input = document.getElementById('input');
@@ -70,7 +73,10 @@
   }
   setWho();
 
+  // 2) Dev Sign-in via POST JSON (user_id + password)
   async function devSignin(){
+    const userId = window.prompt('Enter user id (e.g. demo@local):', 'demo@local');
+    if (userId == null) return;
     const pwd = window.prompt('Enter dev password:', 'demo@local');
     if (pwd == null) return;
 
@@ -80,17 +86,24 @@
     add('system', 'Requesting dev token…');
 
     try {
-      const res = await fetch(api(`/api/auth/dev-token?user_id=${encodeURIComponent(pwd)}`), { signal: ctrl.signal, mode:'cors' });
+      const res = await fetch(api('/api/auth/dev-token'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, password: pwd }),
+        signal: ctrl.signal,
+        mode: 'cors'
+      });
       console.log('[signin] status', res.status);
       if (!res.ok) { add('system', `Sign-in failed (${res.status}).`); return; }
+
       const data = await res.json();
       token = data.token; localStorage.setItem('token', token);
       localStorage.setItem('ul', data.ul ? '1' : '0');
       console.log('[signin] request granted');
-      add('system', `Signed in as ${pwd}${data.ul ? ' (unlimited)' : ''}.`);
+      add('system', `Signed in as ${userId}${data.ul ? ' (unlimited)' : ''}.`);
       setWho();
     } catch (e) {
-      add('system', 'Sign-in error / timeout. Is API on http://localhost:8000 ?');
+      add('system', `Sign-in error / timeout. Is API up at ${API_BASE} ?`);
       console.error(e);
     } finally { clearTimeout(timeout); }
   }
@@ -138,11 +151,12 @@
     $input.value = '';
 
     const el = add('assistant', '');
-    console.log('[chat] POST /api/chat', { sessionId });
-    const resp = await fetch(api('/api/chat'), {
+    console.log('[chat] POST /api/conversations/:id/messages', { sessionId });
+
+    const resp = await fetch(api(`/api/conversations/${sessionId}/messages`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...hdr() },
-      body: JSON.stringify({ session_id: sessionId, message: text }),
+      body: JSON.stringify({ message: text }),
       mode:'cors'
     });
 
@@ -150,22 +164,28 @@
     if(resp.status === 429){ el.textContent = 'Rate limit hit. Try later.'; return; }
     if(!resp.ok){ el.textContent = `Error ${resp.status}`; return; }
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    while(true){
-      const { done, value } = await reader.read();
-      if(done) break;
-      el.textContent += decoder.decode(value, { stream: true });
-      $msgs.scrollTop = $msgs.scrollHeight;
+    // Support both streaming and non-streaming responses:
+    const reader = resp.body?.getReader?.();
+    if (reader) {
+      const decoder = new TextDecoder();
+      while(true){
+        const { done, value } = await reader.read();
+        if(done) break;
+        el.textContent += decoder.decode(value, { stream: true });
+        $msgs.scrollTop = $msgs.scrollHeight;
+      }
+    } else {
+      const data = await resp.json();
+      el.textContent = data.reply ?? data.message ?? JSON.stringify(data);
     }
   });
 
-  // 2) OPTIONAL — if you keep DevAuth, only call it if it exists.
+  // Optional: DevAuth helper if you keep it
   if (window.DevAuth && typeof DevAuth.wrapGlobalFetch === 'function') {
     DevAuth.wrapGlobalFetch();
   }
-  // Remove any code that referenced #dev-signin; we’re using #signin.
 </script>
+
 
 </body>
 </html>
