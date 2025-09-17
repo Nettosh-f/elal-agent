@@ -144,11 +144,14 @@
     const el = add('assistant', '');
     console.log('[chat] POST /api/conversations/:id/messages', { sessionId });
 
-    const resp = await fetch(api(`/api/conversations/${sessionId}/messages`), {
+    const resp = await fetch('https://apk-agent.onrender.com/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...hdr() },
-      body: JSON.stringify({ message: text }),
-      mode:'cors'
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ session_id: sessionId, message: text }),
+      mode: 'cors'
     });
 
     console.log('[chat] status', resp.status);

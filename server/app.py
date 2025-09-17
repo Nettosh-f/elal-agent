@@ -71,6 +71,10 @@ app.add_middleware(
 # ------------ Models ------------
 
 
+class ChatIn(BaseModel):
+    message: str
+
+
 class StartResp(BaseModel):
     session_id: str
 
@@ -78,6 +82,10 @@ class StartResp(BaseModel):
 class ChatReq(BaseModel):
     session_id: str
     message: str
+
+
+class DevSignin(BaseModel):
+    user_id: str
 
 
 def retrieve_context(query: str, k: int = 4) -> List[Dict]:
@@ -177,8 +185,12 @@ SYSTEM_PROMPT = "You are a concise, helpful assistant. Keep answers short unless
 
 
 # ------------ Endpoints ------------
-class DevSignin(BaseModel):
-    user_id: str
+
+@app.post("/api/conversations/{session_id}/messages")
+async def send_message(session_id: str, body: ChatIn, auth: str = Depends(require_auth)):
+    # Reuse existing /api/chat handler
+    return await chat_endpoint(ChatRequest(session_id=session_id, message=body.message), auth)
+
 
 
 @app.post("/api/auth/dev-token")
