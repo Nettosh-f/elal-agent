@@ -16,7 +16,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from prompt import PROMPT
+from prompt import PROMPT, QA_PROMPT
 
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
 # ----- config -------
