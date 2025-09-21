@@ -274,8 +274,8 @@
 
   console.log('[signin] requested');
   const res = await fetch(
-    `https://apk-agent.onrender.com/api/auth/dev-token?user_id=${encodeURIComponent(userId)}`,
-    { method: 'GET', mode: 'cors' }
+   api(`/api/auth/dev-token?user_id=${encodeURIComponent(userId)}`),
+   { method: 'GET', mode: 'cors' }
   );
 
   if (!res.ok) {
@@ -295,7 +295,12 @@
 
   async function startConversation(){
     console.log('[start] POST /api/conversations');
-    const res = await fetch(api('/api/conversations'), { method:'POST', headers: hdr(), mode:'cors' });
+    const res = await fetch(api('/api/conversations'), {
+      method:'POST',
+      headers: { ...hdr(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'qa' }), // or 'trainer'
+      mode:'cors'
+    });
     console.log('[start] status', res.status);
     if (res.status === 401){ add('system', 'Unauthorized. Click Dev Sign-in.'); return; }
     if (!res.ok){ add('system', `Start failed (${res.status}).`); return; }
@@ -338,7 +343,7 @@
     const el = add('assistant', '');
     console.log('[chat] POST /api/conversations/:id/messages', { sessionId });
 
-    const resp = await fetch('https://apk-agent.onrender.com/api/chat', {
+    const resp = await fetch(api('/api/chat'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
