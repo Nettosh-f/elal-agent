@@ -48,3 +48,8 @@ PROMPT = """
 ארוז למתאמן, בקובץ פי.די.אפ ובאנגלית בלבד, את סיכום הנושאים (שאלות ותשובות) מהאימון, וסיכום התחקיר והתובנות. כמו כן בקש ממנו לשלוח את הסיכום למייל: apktrainer.elal@gmail.com
 לצורכי מעקב ושיפור המאמן
 """
+
+QA_PROMPT = (
+    "Answer succinctly using only the attached EL AL manuals via file_search. "
+    "If the answer isn’t in the docs, say so and ask for a section/page. answer in hebrew only."
+)

@@ -1,17 +1,23 @@
 # app.py
-import os, uuid, datetime, time, json
+import datetime
+import json
+import os
+import time
+import uuid
+from pathlib import Path
 from typing import Dict, Any, List
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from openai import OpenAI
 from jose import jwt, JWTError
-from redis.asyncio import Redis
-from pathlib import Path
-from dotenv import load_dotenv
+from openai import OpenAI
 from pydantic import BaseModel
+from redis.asyncio import Redis
+
 from prompt import PROMPT
+
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
 # ----- config -------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -22,12 +28,12 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 DEV_PASSWORD = os.getenv("DEV_PASSWORD", "demo@local")
 REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
 USE_FAKE_REDIS = os.getenv("USE_FAKE_REDIS", "0") == "1"
-
+VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID")
 redis: Redis | None = None
 SESSION_TTL = int(os.getenv("SESSION_TTL_SECONDS", "1800"))  # default 30m
 LOG_DIR = os.getenv("LOG_DIR", "./logs")
 os.makedirs(LOG_DIR, exist_ok=True)
-
+ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
 JWT_ALG = "HS256"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
@@ -82,6 +88,10 @@ class ChatIn(BaseModel):
 
 class StartResp(BaseModel):
     session_id: str
+
+
+class StartIn(BaseModel):
+    mode: str = "qa"  # "qa" or "trainer"
 
 
 class ChatReq(BaseModel):
@@ -201,9 +211,8 @@ SYSTEM_PROMPT = PROMPT
 # ------------ Endpoints ------------
 
 @app.post("/api/conversations/{session_id}/messages")
-async def send_message(session_id: str, body: ChatIn, auth: str = Depends(require_auth)):
-    # Reuse existing /api/chat handler
-    return await chat_endpoint(ChatRequest(session_id=session_id, message=body.message), auth)
+async def send_message(session_id: str, body: ChatIn, user: AuthedUser = Depends(get_current_user)):
+    return await chat(ChatReq(session_id=session_id, message=body.message), user)  # reuse
 
 
 @app.post("/api/auth/dev-token")
@@ -212,56 +221,69 @@ def dev_token_post(body: DevSignin):
 
 
 @app.post("/api/conversations", response_model=StartResp)
-async def start_conversation(user: AuthedUser = Depends(get_current_user)):
+async def start_conversation(body: StartIn, user: AuthedUser = Depends(get_current_user)):
     await enforce_rate_limit(user)
     sid = str(uuid.uuid4())
     created = datetime.datetime.utcnow().isoformat()
-    await redis.hset(sess_meta_key(sid), mapping={"created_at": created, "user": user.sub})
+
+    # choose prompt based on mode
+    system_prompt = PROMPT if body.mode == "trainer" else QA_PROMPT
+
+    await redis.hset(sess_meta_key(sid), mapping={
+        "created_at": created,
+        "user": user.sub,
+        "mode": body.mode
+    })
     await redis.expire(sess_meta_key(sid), SESSION_TTL)
-    await append_msg(sid, {"role": "system", "content": SYSTEM_PROMPT, "ts": ts()})
+
+    # store system prompt into the session’s message log (unchanged flow)
+    await append_msg(sid, {"role": "system", "content": system_prompt, "ts": ts()})
     return {"session_id": sid}
 
 
 @app.post("/api/chat")
 async def chat(req: ChatReq, user: AuthedUser = Depends(get_current_user)):
     await enforce_rate_limit(user)
-    sid = req.session_id
-    if not await session_exists(sid):
+
+    # Validate the session and store user turn in YOUR transcript
+    if not await session_exists(req.session_id):
         raise HTTPException(status_code=404, detail="Unknown or expired session_id")
+    await append_msg(req.session_id, {"role": "user", "content": req.message, "ts": ts()})
 
-    # Append user message
-    await append_msg(sid, {"role": "user", "content": req.message, "ts": ts()})
+    # 1) Make sure we have an Assistant and a Thread for this session
+    asst_id = ensure_assistant_id()
+    thread_id = await get_thread_id_for_session(req.session_id)
 
-    # Build messages for the model (system + recent turns)
-    history = await get_msgs(sid)
-    system = [m for m in history if m["role"] == "system"][:1]
-    recent = [m for m in history if m["role"] != "system"][-16:]
-    messages = [
-        {"role": m["role"], "content": m["content"]} for m in (system + recent)
-    ]
+    # 2) Add the user message to the OpenAI Thread
+    client.beta.threads.messages.create(
+        thread_id=thread_id,
+        role="user",
+        content=req.message,
+    )
 
+    # 3) Stream the Run
     async def agen():
-        buffer: List[str] = []
-
-        def token_iter():
-            with client.responses.stream(
-                    model="gpt-4o-mini",
-                    input=messages,
-                    temperature=0.3,
-            ) as stream:
-                for event in stream:
-                    yield event
-
-        for event in token_iter():
-            if event.type == "response.output_text.delta":
-                chunk = event.delta
-                buffer.append(chunk)
-                yield chunk
-            elif event.type == "response.completed":
-                assistant_text = "".join(buffer)
-                await append_msg(sid, {"role": "assistant", "content": assistant_text, "ts": ts()})
-            elif event.type == "response.error":
-                yield "\n[Error] " + str(event.error)
+        buffer = []
+        # NOTE: runs.stream is a sync context manager; OK inside async generator
+        with client.beta.threads.runs.stream(
+            thread_id=thread_id,
+            assistant_id=asst_id,
+        ) as stream:
+            for event in stream:
+                et = getattr(event, "type", "")
+                if et == "response.output_text.delta":
+                    chunk = event.delta
+                    buffer.append(chunk)
+                    yield chunk
+                elif et == "response.error":
+                    yield f"\n[error] {event.error}"
+                elif et == "response.completed":
+                    # Persist assistant final text to YOUR transcript
+                    final_text = stream.get_final_response().output_text
+                    await append_msg(
+                        req.session_id,
+                        {"role": "assistant", "content": final_text, "ts": ts()}
+                    )
 
     return StreamingResponse(agen(), media_type="text/plain")
 
@@ -285,13 +307,65 @@ async def end_conversation(session_id: str, user: AuthedUser = Depends(get_curre
 
 
 # ------------ Helpers ------------
+def ensure_assistant_id() -> str:
+    """
+    Reuse ASSISTANT_ID if provided; otherwise create an Assistant wired
+    to your vector store for retrieval via file_search.
+    """
+    global ASSISTANT_ID
+    if ASSISTANT_ID:
+        return ASSISTANT_ID
+    if not VECTOR_STORE_ID:
+        raise RuntimeError("VECTOR_STORE_ID is required for retrieval.")
+    asst = client.beta.assistants.create(
+        name="Pilot Trainer / Q&A",
+        model="gpt-4o-mini",
+        # Use your training prompt if you want it globally; or keep this blank and set per-session in messages
+        # instructions=PROMPT,
+        tools=[{"type": "file_search"}],
+        tool_resources={"file_search": {"vector_store_ids": [VECTOR_STORE_ID]}},
+    )
+    ASSISTANT_ID = asst.id
+    print("[assistant] Created:", ASSISTANT_ID)
+    return ASSISTANT_ID
+
+
+async def build_messages_for_session(sid: str, new_user_msg: str) -> list[dict]:
+    # verify session
+    if not await session_exists(sid):
+        raise HTTPException(status_code=404, detail="Unknown or expired session_id")
+
+    # append new user turn into Redis transcript
+    await append_msg(sid, {"role": "user", "content": new_user_msg, "ts": ts()})
+
+    # rebuild messages for OpenAI (system first, then rest)
+    msgs = await get_msgs(sid)
+    return [{"role": m["role"], "content": m["content"]} for m in msgs]
+
+
+async def store_assistant_turn(sid: str, text: str):
+    await append_msg(sid, {"role": "assistant", "content": text, "ts": ts()})
+
+
+async def get_thread_id_for_session(sid: str) -> str:
+    """Create or load the OpenAI Thread ID tied to this session."""
+    r = await get_redis_client()
+    tid = await r.hget(sess_meta_key(sid), "thread_id")
+    if tid:
+        return tid
+    thread = client.beta.threads.create()
+    tid = thread.id
+    await r.hset(sess_meta_key(sid), mapping={"thread_id": tid})
+    await r.expire(sess_meta_key(sid), SESSION_TTL)
+    return tid
+
 
 
 @app.on_event("startup")
 async def startup_event():
     print("[startup] init redis")
     await init_redis()
-
+    ensure_assistant_id()
 
 async def get_redis_client() -> Redis:
     global redis
